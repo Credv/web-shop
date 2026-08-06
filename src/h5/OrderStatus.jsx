@@ -88,10 +88,16 @@ export default function OrderStatus() {
               </Button>
             </>
           ) : (
-            <div className="pay-tips" style={{ textAlign: 'center' }}>
-              商家暂未上传收款码，请直接现场付款后告知商家
-            </div>
-          )}
+            <>
+              <div className="pay-tips" style={{ textAlign: 'center', marginBottom: 16 }}>
+                💡 本地演示模式：商家尚未上传收款码<br />
+                点击下方「我已完成支付」进行测试
+              </div>
+              <Button block color="primary" size="large" loading={paying} onClick={confirmPaid}>
+                我已完成支付
+              </Button>
+            </>
+          )}}
         </div>
       </div>
     );
