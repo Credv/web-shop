@@ -16,16 +16,31 @@ if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 app.use(express.json({ limit: '2mb' }));
 app.use('/uploads', express.static(UPLOAD_DIR));
 
-// ---------- 登录鉴权 ----------
-function auth(req, res, next) {
+// ---------- 初始化数据库 ----------
+db.initDb().catch(console.error);
+
+// ---------- 鉴权中间件 ----------
+function adminAuth(req, res, next) {
   const token = (req.headers.authorization || '').replace(/^Bearer\s+/, '');
-  if (!db.verifyToken(token)) {
+  const payload = db.verifyToken(token);
+  if (!payload || !payload.merchant_id) {
     return res.status(401).json({ message: '未登录或登录已过期' });
   }
+  req.merchant_id = payload.merchant_id;
   next();
 }
 
-// ---------- 图片上传（商品图 / 头像 / 收款码） ----------
+function h5Auth(req, res, next) {
+  const token = (req.headers.authorization || '').replace(/^Bearer\s+/, '');
+  const payload = db.verifyToken(token);
+  if (!payload || !payload.phone) {
+    return res.status(401).json({ message: '未登录' });
+  }
+  req.customer_phone = payload.phone;
+  next();
+}
+
+// ---------- 图片上传 ----------
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, UPLOAD_DIR),
   filename: (req, file, cb) => {
@@ -42,373 +57,458 @@ const upload = multer({
   },
 });
 
-app.post('/api/upload', auth, upload.single('file'), (req, res) => {
+app.post('/api/upload', adminAuth, upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ message: '未收到文件' });
   res.json({ url: '/uploads/' + req.file.filename });
 });
 
 // ============================================================
-// 用户端（H5）接口
+// 商家后台 API
 // ============================================================
 
-// 店铺信息 + 分类 + 在售商品
-app.get('/api/shop/info', (req, res) => {
-  const d = db.getData();
-  res.json({
-    settings: {
-      shopName: d.settings.shopName,
-      avatar: d.settings.avatar,
-      announcement: d.settings.announcement,
-      open: d.settings.open,
-      wechatPay: d.settings.wechatPay,
-      alipayPay: d.settings.alipayPay,
-    },
-    categories: d.categories,
-    products: d.products
-      .filter((p) => p.onSale)
-      .sort((a, b) => (a.sort || 0) - (b.sort || 0)),
-  });
+// 商家登录
+app.post('/api/admin/login', async (req, res) => {
+  try {
+    const { phone, password } = req.body || {};
+    if (!phone || !password) return res.status(400).json({ message: '手机号和密码不能为空' });
+
+    const merchant = await db.getAsync('SELECT * FROM merchants WHERE phone = ?', [phone]);
+    if (!merchant || !db.verifyPassword(password, merchant.password_hash)) {
+      return res.status(400).json({ message: '手机号或密码错误' });
+    }
+
+    const token = db.signToken({ merchant_id: merchant.id, phone });
+    res.json({ token, merchant_id: merchant.id });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
 });
 
-// 创建订单（下单即扣库存）
-app.post('/api/orders', (req, res) => {
-  const d = db.getData();
-  if (!d.settings.open) {
-    return res.status(400).json({ message: '本店暂时休息中，暂不支持下单' });
-  }
-  const { items, note, phone, payMethod } = req.body || {};
-  if (!Array.isArray(items) || items.length === 0) {
-    return res.status(400).json({ message: '购物车为空' });
-  }
-  if (phone && !/^1\d{10}$/.test(phone)) {
-    return res.status(400).json({ message: '手机号格式不正确' });
-  }
-  if (!['wechat', 'alipay'].includes(payMethod)) {
-    return res.status(400).json({ message: '请选择支付方式' });
-  }
-  if (payMethod === 'wechat' && !d.settings.wechatPay) {
-    return res.status(400).json({ message: '商家暂未配置微信收款码' });
-  }
-  if (payMethod === 'alipay' && !d.settings.alipayPay) {
-    return res.status(400).json({ message: '商家暂未配置支付宝收款码' });
-  }
+// 商家注册（手机号+密码）
+app.post('/api/admin/register', async (req, res) => {
+  try {
+    const { phone, password, name } = req.body || {};
+    if (!phone || !password) return res.status(400).json({ message: '手机号和密码不能为空' });
 
-  const orderItems = [];
-  let total = 0;
-  for (const it of items) {
-    const product = d.products.find((p) => p.id === it.productId);
-    if (!product || !product.onSale) {
-      return res.status(400).json({ message: '部分商品已下架，请刷新后重试' });
+    const exist = await db.getAsync('SELECT id FROM merchants WHERE phone = ?', [phone]);
+    if (exist) return res.status(400).json({ message: '该手机号已注册' });
+
+    const merchant_id = db.genId('merchant');
+    const password_hash = db.hashPassword(password);
+    await db.runAsync(
+      'INSERT INTO merchants (id, phone, password_hash, name, created_at) VALUES (?, ?, ?, ?, ?)',
+      [merchant_id, phone, password_hash, name || '小店', Date.now()]
+    );
+
+    const token = db.signToken({ merchant_id, phone });
+    res.json({ token, merchant_id });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
+// 商家信息
+app.get('/api/admin/info', adminAuth, async (req, res) => {
+  try {
+    const merchant = await db.getAsync('SELECT * FROM merchants WHERE id = ?', [req.merchant_id]);
+    if (!merchant) return res.status(404).json({ message: '商家不存在' });
+    res.json(merchant);
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
+// 更新商家信息（店铺名、营业状态、收款码等）
+app.patch('/api/admin/info', adminAuth, async (req, res) => {
+  try {
+    const { name, open, wechat_code, alipay_code } = req.body || {};
+    const updates = [];
+    const params = [];
+
+    if (name !== undefined) {
+      updates.push('name = ?');
+      params.push(name);
     }
-    const qty = Math.max(1, Math.min(parseInt(it.qty, 10) || 0, 99));
-    if (qty > product.stock) {
-      return res
-        .status(400)
-        .json({ message: `「${product.name}」库存不足，仅剩 ${product.stock} 份` });
+    if (open !== undefined) {
+      updates.push('open = ?');
+      params.push(open ? 1 : 0);
     }
-    orderItems.push({
-      productId: product.id,
-      name: product.name,
-      price: product.price,
-      image: product.image,
-      qty,
+    if (wechat_code !== undefined) {
+      updates.push('wechat_code = ?');
+      params.push(wechat_code);
+    }
+    if (alipay_code !== undefined) {
+      updates.push('alipay_code = ?');
+      params.push(alipay_code);
+    }
+
+    if (updates.length === 0) return res.status(400).json({ message: '未提供任何更新字段' });
+
+    params.push(req.merchant_id);
+    await db.runAsync(
+      `UPDATE merchants SET ${updates.join(', ')} WHERE id = ?`,
+      params
+    );
+
+    const merchant = await db.getAsync('SELECT * FROM merchants WHERE id = ?', [req.merchant_id]);
+    res.json(merchant);
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
+// 分类列表
+app.get('/api/admin/categories', adminAuth, async (req, res) => {
+  try {
+    const cats = await db.allAsync(
+      'SELECT * FROM categories WHERE merchant_id = ? ORDER BY sort DESC, created_at',
+      [req.merchant_id]
+    );
+    res.json(cats);
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
+// 新增分类
+app.post('/api/admin/categories', adminAuth, async (req, res) => {
+  try {
+    const { name } = req.body || {};
+    if (!name) return res.status(400).json({ message: '分类名不能为空' });
+
+    const id = db.genId('cat');
+    await db.runAsync(
+      'INSERT INTO categories (id, merchant_id, name, sort, created_at) VALUES (?, ?, ?, ?, ?)',
+      [id, req.merchant_id, name, 0, Date.now()]
+    );
+
+    const cats = await db.allAsync(
+      'SELECT * FROM categories WHERE merchant_id = ? ORDER BY sort DESC, created_at',
+      [req.merchant_id]
+    );
+    res.json(cats);
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
+// 删除分类
+app.delete('/api/admin/categories/:id', adminAuth, async (req, res) => {
+  try {
+    await db.runAsync(
+      'DELETE FROM categories WHERE id = ? AND merchant_id = ?',
+      [req.params.id, req.merchant_id]
+    );
+    const cats = await db.allAsync(
+      'SELECT * FROM categories WHERE merchant_id = ? ORDER BY sort DESC, created_at',
+      [req.merchant_id]
+    );
+    res.json(cats);
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
+// 商品列表
+app.get('/api/admin/products', adminAuth, async (req, res) => {
+  try {
+    const products = await db.allAsync(
+      'SELECT * FROM products WHERE merchant_id = ? ORDER BY sort DESC, created_at',
+      [req.merchant_id]
+    );
+    res.json(products);
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
+// 新增/编辑商品
+app.post('/api/admin/products', adminAuth, async (req, res) => {
+  try {
+    const { id, name, categoryId, description, price, stock, onSale, image, sort } = req.body || {};
+
+    if (!name || !categoryId) {
+      return res.status(400).json({ message: '商品名和分类不能为空' });
+    }
+
+    const priceCents = Math.round(Number(price) * 100);
+
+    if (id) {
+      // 编辑
+      await db.runAsync(
+        `UPDATE products SET name = ?, category_id = ?, description = ?, price = ?, stock = ?, on_sale = ?, image = ?, sort = ? WHERE id = ? AND merchant_id = ?`,
+        [name, categoryId, description, priceCents, stock, onSale ? 1 : 0, image, sort, id, req.merchant_id]
+      );
+    } else {
+      // 新增
+      const pid = db.genId('p');
+      await db.runAsync(
+        `INSERT INTO products (id, merchant_id, category_id, name, description, price, stock, image, on_sale, sort, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [pid, req.merchant_id, categoryId, name, description, priceCents, stock, image || '', onSale ? 1 : 0, sort, Date.now()]
+      );
+    }
+
+    const products = await db.allAsync(
+      'SELECT * FROM products WHERE merchant_id = ? ORDER BY sort DESC, created_at',
+      [req.merchant_id]
+    );
+    res.json(products);
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
+// 删除商品
+app.delete('/api/admin/products/:id', adminAuth, async (req, res) => {
+  try {
+    await db.runAsync(
+      'DELETE FROM products WHERE id = ? AND merchant_id = ?',
+      [req.params.id, req.merchant_id]
+    );
+    const products = await db.allAsync(
+      'SELECT * FROM products WHERE merchant_id = ? ORDER BY sort DESC, created_at',
+      [req.merchant_id]
+    );
+    res.json(products);
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
+// 订单列表
+app.get('/api/admin/orders', adminAuth, async (req, res) => {
+  try {
+    const orders = await db.allAsync(
+      'SELECT * FROM orders WHERE merchant_id = ? ORDER BY created_at DESC',
+      [req.merchant_id]
+    );
+    res.json(
+      orders.map((o) => ({
+        ...o,
+        items: JSON.parse(o.items),
+      }))
+    );
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
+// 更新订单状态
+app.patch('/api/admin/orders/:id', adminAuth, async (req, res) => {
+  try {
+    const { status } = req.body || {};
+    const order = await db.getAsync(
+      'SELECT * FROM orders WHERE id = ? AND merchant_id = ?',
+      [req.params.id, req.merchant_id]
+    );
+    if (!order) return res.status(404).json({ message: '订单不存在' });
+
+    // 如果从 paid 改为 cancelled，退库存
+    if (order.status === 'paid' && status === 'cancelled') {
+      const items = JSON.parse(order.items);
+      for (const item of items) {
+        await db.runAsync(
+          'UPDATE products SET stock = stock + ? WHERE id = ? AND merchant_id = ?',
+          [item.qty, item.productId, req.merchant_id]
+        );
+      }
+    }
+
+    await db.runAsync(
+      'UPDATE orders SET status = ? WHERE id = ? AND merchant_id = ?',
+      [status, req.params.id, req.merchant_id]
+    );
+
+    const orders = await db.allAsync(
+      'SELECT * FROM orders WHERE merchant_id = ? ORDER BY created_at DESC',
+      [req.merchant_id]
+    );
+    res.json(
+      orders.map((o) => ({
+        ...o,
+        items: JSON.parse(o.items),
+      }))
+    );
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
+// ============================================================
+// H5 用户端 API
+// ============================================================
+
+// 获取某商家店铺信息
+app.get('/api/shop/:merchantId/info', async (req, res) => {
+  try {
+    const merchant = await db.getAsync('SELECT * FROM merchants WHERE id = ?', [req.params.merchantId]);
+    if (!merchant) return res.status(404).json({ message: '店铺不存在' });
+
+    const categories = await db.allAsync(
+      'SELECT id, name FROM categories WHERE merchant_id = ? ORDER BY sort DESC',
+      [req.params.merchantId]
+    );
+
+    const products = await db.allAsync(
+      'SELECT * FROM products WHERE merchant_id = ? AND on_sale = 1 ORDER BY sort DESC',
+      [req.params.merchantId]
+    );
+
+    res.json({
+      merchant: {
+        id: merchant.id,
+        name: merchant.name,
+        open: !!merchant.open,
+        wechat_code: merchant.wechat_code,
+        alipay_code: merchant.alipay_code,
+      },
+      categories,
+      products,
+      settings: {
+        open: !!merchant.open,
+      },
     });
-    total += product.price * qty;
-  }
-
-  for (const it of orderItems) {
-    const product = d.products.find((p) => p.id === it.productId);
-    product.stock -= it.qty;
-  }
-
-  const order = {
-    id: crypto.randomUUID(),
-    orderNo: db.nextOrderNo(),
-    pickupCode: db.genPickupCode(),
-    status: 'unpaid',
-    items: orderItems,
-    total,
-    note: (note || '').slice(0, 100),
-    phone: phone || '',
-    payMethod,
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  };
-  d.orders.unshift(order);
-  db.save();
-  res.json(order);
-});
-
-// 用户确认「我已支付」
-app.post('/api/orders/:id/paid', (req, res) => {
-  const order = db.getData().orders.find((o) => o.id === req.params.id);
-  if (!order) return res.status(404).json({ message: '订单不存在' });
-  if (order.status !== 'unpaid') {
-    return res.status(400).json({ message: '订单状态已变化，请刷新' });
-  }
-  order.status = 'paid';
-  order.updatedAt = Date.now();
-  db.save();
-  res.json(order);
-});
-
-// 查询订单详情（用户凭订单 id 轮询状态）
-app.get('/api/orders/:id', (req, res) => {
-  const order = db.getData().orders.find((o) => o.id === req.params.id);
-  if (!order) return res.status(404).json({ message: '订单不存在' });
-  res.json(order);
-});
-
-// ---------- H5 顾客手机号登录（可选，登录后订单历史存服务器） ----------
-function h5Auth(req, res, next) {
-  const token = (req.headers.authorization || '').replace(/^Bearer\s+/, '');
-  const payload = db.verifyToken(token);
-  if (!payload || !payload.phone) {
-    return res.status(401).json({ message: '未登录' });
-  }
-  req.h5Phone = payload.phone;
-  next();
-}
-
-app.post('/api/h5/login', (req, res) => {
-  const body = req.body || {};
-  const phone = String(body.phone || '').trim();
-  if (!/^1\d{10}$/.test(phone)) {
-    return res.status(400).json({ message: '手机号格式不正确' });
-  }
-  // 认领本机历史订单（仅限未留手机号的订单，避免覆盖他人订单）
-  const claimIds = Array.isArray(body.claimIds) ? body.claimIds : [];
-  const d = db.getData();
-  let claimed = 0;
-  for (const id of claimIds) {
-    const order = d.orders.find((o) => o.id === id);
-    if (order && !order.phone) {
-      order.phone = phone;
-      claimed += 1;
-    }
-  }
-  if (claimed > 0) db.save();
-  res.json({ token: db.signToken({ phone }), phone });
-});
-
-app.get('/api/h5/orders', h5Auth, (req, res) => {
-  res.json(db.getData().orders.filter((o) => o.phone === req.h5Phone));
-});
-
-// ============================================================
-// 商家后台接口（需登录）
-// ============================================================
-
-app.post('/api/admin/login', (req, res) => {
-  const { password } = req.body || {};
-  if (!db.checkPassword(password || '')) {
-    return res.status(400).json({ message: '密码不正确' });
-  }
-  res.json({ token: db.signToken() });
-});
-
-// ---------- 订单 ----------
-app.get('/api/admin/orders', auth, (req, res) => {
-  res.json(db.getData().orders);
-});
-
-app.patch('/api/admin/orders/:id', auth, (req, res) => {
-  const ALLOWED = ['unpaid', 'paid', 'making', 'ready', 'done', 'cancelled'];
-  const { status } = req.body || {};
-  if (!ALLOWED.includes(status)) {
-    return res.status(400).json({ message: '非法状态' });
-  }
-  const d = db.getData();
-  const order = d.orders.find((o) => o.id === req.params.id);
-  if (!order) return res.status(404).json({ message: '订单不存在' });
-  if (order.status === status) return res.json(order);
-  // 取消订单退回库存
-  if (status === 'cancelled') {
-    for (const it of order.items) {
-      const p = d.products.find((p) => p.id === it.productId);
-      if (p) p.stock += it.qty;
-    }
-  }
-  order.status = status;
-  order.updatedAt = Date.now();
-  db.save();
-  res.json(order);
-});
-
-// ---------- 分类 ----------
-app.get('/api/admin/categories', auth, (req, res) => {
-  res.json(db.getData().categories);
-});
-
-app.post('/api/admin/categories', auth, (req, res) => {
-  const d = db.getData();
-  const name = String((req.body || {}).name || '').trim();
-  if (!name) return res.status(400).json({ message: '分类名称不能为空' });
-  if (d.categories.some((c) => c.name === name)) {
-    return res.status(400).json({ message: '分类已存在' });
-  }
-  d.categories.push({ id: crypto.randomUUID(), name });
-  db.save();
-  res.json(d.categories);
-});
-
-app.put('/api/admin/categories/:id', auth, (req, res) => {
-  const d = db.getData();
-  const cat = d.categories.find((c) => c.id === req.params.id);
-  if (!cat) return res.status(404).json({ message: '分类不存在' });
-  const name = String((req.body || {}).name || '').trim();
-  if (!name) return res.status(400).json({ message: '分类名称不能为空' });
-  if (d.categories.some((c) => c.name === name && c.id !== cat.id)) {
-    return res.status(400).json({ message: '分类已存在' });
-  }
-  cat.name = name;
-  db.save();
-  res.json(d.categories);
-});
-
-// 整体调整分类顺序
-app.put('/api/admin/categories', auth, (req, res) => {
-  const d = db.getData();
-  const order = ((req.body || {}).categories || []).map((c) => c.id);
-  d.categories.sort((a, b) => {
-    const ia = order.indexOf(a.id);
-    const ib = order.indexOf(b.id);
-    return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
-  });
-  db.save();
-  res.json(d.categories);
-});
-
-app.delete('/api/admin/categories/:id', auth, (req, res) => {
-  const d = db.getData();
-  if (d.products.some((p) => p.categoryId === req.params.id)) {
-    return res.status(400).json({ message: '该分类下还有商品，请先删除或移动商品' });
-  }
-  d.categories = d.categories.filter((c) => c.id !== req.params.id);
-  db.save();
-  res.json(d.categories);
-});
-
-// ---------- 商品 ----------
-app.get('/api/admin/products', auth, (req, res) => {
-  res.json(db.getData().products);
-});
-
-function parseProductBody(body) {
-  const name = String(body.name || '').trim();
-  if (!name) throw new Error('商品名称不能为空');
-  const categoryId = body.categoryId;
-  if (!db.getData().categories.some((c) => c.id === categoryId)) {
-    throw new Error('请选择有效分类');
-  }
-  const price = parseInt(body.price, 10);
-  if (!(price >= 0)) throw new Error('价格不能为负数');
-  const stock = parseInt(body.stock, 10);
-  if (!(stock >= 0)) throw new Error('库存不能为负数');
-  return {
-    name,
-    categoryId,
-    price,
-    stock,
-    description: String(body.description || '').slice(0, 100),
-    image: String(body.image || ''),
-    onSale: body.onSale !== false,
-    sort: parseInt(body.sort, 10) || 0,
-  };
-}
-
-app.post('/api/admin/products', auth, (req, res) => {
-  const d = db.getData();
-  let fields;
-  try {
-    fields = parseProductBody(req.body || {});
   } catch (e) {
-    return res.status(400).json({ message: e.message });
+    res.status(500).json({ message: e.message });
   }
-  const product = { id: crypto.randomUUID(), ...fields };
-  d.products.push(product);
-  db.save();
-  res.json(product);
 });
 
-app.put('/api/admin/products/:id', auth, (req, res) => {
-  const d = db.getData();
-  const product = d.products.find((p) => p.id === req.params.id);
-  if (!product) return res.status(404).json({ message: '商品不存在' });
+// H5 用户登录
+app.post('/api/h5/login', async (req, res) => {
   try {
-    const fields = parseProductBody({ ...product, ...(req.body || {}) });
-    Object.assign(product, fields);
-  } catch (e) {
-    return res.status(400).json({ message: e.message });
-  }
-  db.save();
-  res.json(product);
-});
-
-app.delete('/api/admin/products/:id', auth, (req, res) => {
-  const d = db.getData();
-  d.products = d.products.filter((p) => p.id !== req.params.id);
-  db.save();
-  res.json({ ok: true });
-});
-
-// ---------- 店铺设置 ----------
-app.get('/api/admin/settings', auth, (req, res) => {
-  res.json(db.getData().settings);
-});
-
-app.put('/api/admin/settings', auth, (req, res) => {
-  const s = db.getData().settings;
-  const b = req.body || {};
-  ['shopName', 'announcement', 'avatar', 'wechatPay', 'alipayPay'].forEach((k) => {
-    if (typeof b[k] === 'string') s[k] = b[k];
-  });
-  if (typeof b.open === 'boolean') s.open = b.open;
-  db.save();
-  res.json(s);
-});
-
-// ---------- 修改密码 ----------
-app.patch('/api/admin/password', auth, (req, res) => {
-  const { oldPassword, newPassword } = req.body || {};
-  if (!db.checkPassword(oldPassword || '')) {
-    return res.status(400).json({ message: '原密码不正确' });
-  }
-  if (!newPassword || String(newPassword).length < 6) {
-    return res.status(400).json({ message: '新密码至少 6 位' });
-  }
-  db.setPassword(newPassword);
-  res.json({ ok: true });
-});
-
-// ============================================================
-// 静态资源（构建产物）与 SPA 回退
-// ============================================================
-if (fs.existsSync(DIST_DIR)) {
-  app.use(express.static(DIST_DIR));
-  app.use((req, res, next) => {
-    if (
-      req.method === 'GET' &&
-      !req.path.startsWith('/api') &&
-      !req.path.startsWith('/uploads')
-    ) {
-      return res.sendFile(path.join(DIST_DIR, 'index.html'));
+    const phone = String((req.body || {}).phone || '').trim();
+    if (!/^1\d{10}$/.test(phone)) {
+      return res.status(400).json({ message: '手机号格式不正确' });
     }
-    next();
-  });
-} else {
-  app.get('/', (req, res) =>
-    res.send('前端尚未构建：开发请使用 npm run dev，部署请先执行 npm run build')
-  );
-}
 
-// 统一错误处理
-app.use((err, req, res, next) => {
-  res.status(400).json({ message: err.message || '服务器错误' });
+    const token = db.signToken({ phone });
+    res.json({ token, phone });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
+// H5 获取用户订单历史
+app.get('/api/h5/orders/:merchantId', h5Auth, async (req, res) => {
+  try {
+    const orders = await db.allAsync(
+      'SELECT * FROM orders WHERE merchant_id = ? AND customer_phone = ? ORDER BY created_at DESC',
+      [req.params.merchantId, req.customer_phone]
+    );
+    res.json(
+      orders.map((o) => ({
+        ...o,
+        items: JSON.parse(o.items),
+      }))
+    );
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
+// 获取单个订单
+app.get('/api/shop/:merchantId/orders/:orderId', async (req, res) => {
+  try {
+    const order = await db.getAsync(
+      'SELECT * FROM orders WHERE id = ? AND merchant_id = ?',
+      [req.params.orderId, req.params.merchantId]
+    );
+    if (!order) return res.status(404).json({ message: '订单不存在' });
+
+    res.json({
+      ...order,
+      items: JSON.parse(order.items),
+    });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
+// 下单
+app.post('/api/shop/:merchantId/orders', async (req, res) => {
+  try {
+    const { items, total, phone, payMethod, note } = req.body || {};
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ message: '订单商品不能为空' });
+    }
+
+    const merchant = await db.getAsync('SELECT id FROM merchants WHERE id = ?', [req.params.merchantId]);
+    if (!merchant) return res.status(404).json({ message: '店铺不存在' });
+
+    const orderId = db.genId('order');
+    const orderNo = db.genOrderNo(req.params.merchantId);
+    const pickupCode = db.genPickupCode();
+
+    // 扣库存
+    for (const item of items) {
+      await db.runAsync(
+        'UPDATE products SET stock = stock - ? WHERE id = ? AND merchant_id = ?',
+        [item.qty, item.productId, req.params.merchantId]
+      );
+    }
+
+    // 创建订单
+    await db.runAsync(
+      `INSERT INTO orders (id, merchant_id, customer_phone, items, total, status, pay_method, pickup_code, order_no, note, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        orderId,
+        req.params.merchantId,
+        phone || '',
+        JSON.stringify(items),
+        total,
+        'unpaid',
+        payMethod || 'wechat',
+        pickupCode,
+        orderNo,
+        note || '',
+        Date.now(),
+      ]
+    );
+
+    res.json({
+      id: orderId,
+      orderNo,
+      pickupCode,
+      total,
+      status: 'unpaid',
+    });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
+// H5 用户标记已支付
+app.patch('/api/shop/:merchantId/orders/:orderId/pay', async (req, res) => {
+  try {
+    const order = await db.getAsync(
+      'SELECT * FROM orders WHERE id = ? AND merchant_id = ?',
+      [req.params.orderId, req.params.merchantId]
+    );
+    if (!order) return res.status(404).json({ message: '订单不存在' });
+
+    await db.runAsync(
+      'UPDATE orders SET status = ? WHERE id = ?',
+      ['paid', req.params.orderId]
+    );
+
+    res.json({ status: 'paid' });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
+// ============================================================
+// SPA Fallback + 静态文件
+// ============================================================
+app.use('/admin', express.static(DIST_DIR));
+app.use('/', express.static(DIST_DIR));
+app.get('*', (req, res) => {
+  res.sendFile(path.join(DIST_DIR, 'index.html'));
 });
 
 app.listen(PORT, () => {
-  console.log(`✅ 小店服务已启动: http://localhost:${PORT}`);
-  console.log(`   用户端 H5:   http://localhost:${PORT}/`);
-  console.log(`   商家后台:    http://localhost:${PORT}/admin`);
+  console.log(`\n🚀 服务器运行在 http://localhost:${PORT}`);
+  console.log(`📱 H5 店铺页：http://localhost:${PORT}/`);
+  console.log(`🏪 商家后台：http://localhost:${PORT}/admin\n`);
 });

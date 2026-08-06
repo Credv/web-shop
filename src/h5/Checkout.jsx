@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { NavBar, TextArea, Input, Toast, Button, Image } from 'antd-mobile';
 import { api, fmtPrice, loadCart, CART_KEY, addLocalOrderId, getH5User } from '../api';
 
 export default function Checkout() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const merchantId = searchParams.get('mid') || '';
   const [info, setInfo] = useState(null);
-  const [cart] = useState(loadCart);
+  const [cart] = useState(() => loadCart());
   const [note, setNote] = useState('');
   // 已登录手机号自动带出，下单后订单计入该手机号的历史
   const [phone, setPhone] = useState(() => (getH5User() || {}).phone || '');
@@ -14,7 +16,11 @@ export default function Checkout() {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    api('/api/shop/info')
+    if (!merchantId) {
+      Toast.show('缺少商家 ID');
+      return;
+    }
+    api(`/api/shop/${merchantId}/info`)
       .then(setInfo)
       .catch((e) => Toast.show(e.message));
   }, []);
@@ -29,7 +35,7 @@ export default function Checkout() {
   useEffect(() => {
     if (!info) return;
     if (items.length === 0) {
-      navigate('/', { replace: true });
+      navigate(`/?mid=${merchantId}`, { replace: true });
       return;
     }
     // 默认选中第一个可用的支付方式
@@ -54,7 +60,7 @@ export default function Checkout() {
     }
     setSubmitting(true);
     try {
-      const order = await api('/api/orders', {
+      const order = await api(`/api/shop/${merchantId}/orders`, {
         method: 'POST',
         body: {
           items: items.map((i) => ({ productId: i.id, qty: i.qty })),
@@ -65,7 +71,7 @@ export default function Checkout() {
       });
       localStorage.removeItem(CART_KEY);
       addLocalOrderId(order.id);
-      navigate(`/order/${order.id}?pay=1`, { replace: true });
+      navigate(`/order/${order.id}?pay=1&mid=${merchantId}`, { replace: true });
     } catch (e) {
       Toast.show(e.message);
       setSubmitting(false);
@@ -74,7 +80,7 @@ export default function Checkout() {
 
   return (
     <div className="page">
-      <NavBar onBack={() => navigate('/')}>确认订单</NavBar>
+      <NavBar onBack={() => navigate(`/?mid=${merchantId}`)}>确认订单</NavBar>
 
       <div className="section">
         <div className="section-title">商品清单</div>

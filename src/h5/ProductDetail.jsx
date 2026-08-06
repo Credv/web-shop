@@ -1,17 +1,23 @@
 import { useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { NavBar, Toast, Badge, Image, Button } from 'antd-mobile';
 import { api, fmtPrice, loadCart, saveCart } from '../api';
 
 export default function ProductDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const merchantId = searchParams.get('mid') || '';
   const [info, setInfo] = useState(null);
   const [error, setError] = useState('');
-  const [cart, setCart] = useState(loadCart);
+  const [cart, setCart] = useState(() => loadCart());
 
   useEffect(() => {
-    api('/api/shop/info')
+    if (!merchantId) {
+      setError('缺少商家 ID');
+      return;
+    }
+    api(`/api/shop/${merchantId}/info`)
       .then(setInfo)
       .catch((e) => setError(e.message));
   }, []);
@@ -29,11 +35,11 @@ export default function ProductDetail() {
   if (!product) {
     return (
       <div className="page">
-        <NavBar onBack={() => navigate('/')}>商品详情</NavBar>
+        <NavBar onBack={() => navigate(`/?mid=${merchantId}`)}>商品详情</NavBar>
         <div style={{ padding: '60px 12px', textAlign: 'center' }}>
           <div style={{ fontSize: 40 }}>🥲</div>
           <div style={{ color: '#999', marginTop: 12 }}>商品已下架或不存在</div>
-          <Button color="primary" size="large" style={{ marginTop: 20 }} onClick={() => navigate('/')}>
+          <Button color="primary" size="large" style={{ marginTop: 20 }} onClick={() => navigate(`/?mid=${merchantId}`)}>
             回店铺看看
           </Button>
         </div>
@@ -70,7 +76,7 @@ export default function ProductDetail() {
       return;
     }
     if (totalCount === 0) return;
-    navigate('/checkout');
+    navigate(`/checkout?mid=${merchantId}`);
   };
 
   return (

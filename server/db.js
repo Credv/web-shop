@@ -1,117 +1,189 @@
-const fs = require('fs');
-const path = require('path');
 const crypto = require('crypto');
+const sqlite3 = require('sqlite3').verbose();
+const path = require('path');
 
-const DATA_DIR = path.join(__dirname, 'data');
-const DATA_FILE = path.join(DATA_DIR, 'data.json');
+const DB_PATH = path.join(__dirname, 'data', 'shop.db');
 
-const sha256 = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
+let db = null;
 
-function defaultData() {
-  return {
-    secret: crypto.randomBytes(32).toString('hex'),
-    // 默认密码 admin123，请登录后在「店铺设置」中修改
-    adminPasswordHash: sha256('admin123'),
-    orderSeq: 1,
-    settings: {
-      shopName: '我的摆摊小店',
-      avatar: '',
-      announcement: '欢迎光临，扫码即可下单～',
-      open: true,
-      wechatPay: '',
-      alipayPay: '',
-    },
-    categories: [],
-    products: [],
-    orders: [],
-  };
+function getDb() {
+  if (!db) {
+    db = new sqlite3.Database(DB_PATH, (err) => {
+      if (err) console.error('Database open error:', err);
+      else console.log('✅ SQLite 数据库已连接');
+    });
+    db.configure('busyTimeout', 5000);
+  }
+  return db;
 }
 
-let data;
+function runAsync(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    getDb().run(sql, params, function (err) {
+      if (err) reject(err);
+      else resolve({ lastID: this.lastID, changes: this.changes });
+    });
+  });
+}
 
-function load() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-  if (fs.existsSync(DATA_FILE)) {
-    data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-  } else {
-    data = defaultData();
-    save();
+function getAsync(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    getDb().get(sql, params, (err, row) => {
+      if (err) reject(err);
+      else resolve(row);
+    });
+  });
+}
+
+function allAsync(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    getDb().all(sql, params, (err, rows) => {
+      if (err) reject(err);
+      else resolve(rows || []);
+    });
+  });
+}
+
+// ==================== 初始化数据库 ====================
+async function initDb() {
+  try {
+    // 商家表
+    await runAsync(`
+      CREATE TABLE IF NOT EXISTS merchants (
+        id TEXT PRIMARY KEY,
+        phone TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        name TEXT DEFAULT '小店',
+        wechat_code TEXT,
+        alipay_code TEXT,
+        open INTEGER DEFAULT 1,
+        created_at INTEGER
+      )
+    `);
+
+    // 分类表
+    await runAsync(`
+      CREATE TABLE IF NOT EXISTS categories (
+        id TEXT PRIMARY KEY,
+        merchant_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        sort INTEGER DEFAULT 0,
+        created_at INTEGER,
+        FOREIGN KEY (merchant_id) REFERENCES merchants(id)
+      )
+    `);
+
+    // 商品表
+    await runAsync(`
+      CREATE TABLE IF NOT EXISTS products (
+        id TEXT PRIMARY KEY,
+        merchant_id TEXT NOT NULL,
+        category_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        price INTEGER NOT NULL,
+        stock INTEGER NOT NULL,
+        image TEXT,
+        on_sale INTEGER DEFAULT 1,
+        sort INTEGER DEFAULT 0,
+        created_at INTEGER,
+        FOREIGN KEY (merchant_id) REFERENCES merchants(id),
+        FOREIGN KEY (category_id) REFERENCES categories(id)
+      )
+    `);
+
+    // 订单表
+    await runAsync(`
+      CREATE TABLE IF NOT EXISTS orders (
+        id TEXT PRIMARY KEY,
+        merchant_id TEXT NOT NULL,
+        customer_phone TEXT,
+        items TEXT NOT NULL,
+        total INTEGER NOT NULL,
+        status TEXT DEFAULT 'unpaid',
+        pay_method TEXT,
+        pickup_code TEXT,
+        order_no TEXT,
+        note TEXT,
+        created_at INTEGER,
+        FOREIGN KEY (merchant_id) REFERENCES merchants(id)
+      )
+    `);
+
+    console.log('✅ 数据库表初始化完成');
+  } catch (e) {
+    if (!e.message.includes('already exists')) {
+      console.error('❌ 初始化数据库失败:', e.message);
+    }
   }
 }
 
-function save() {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+// ==================== 密码和 Token ====================
+function hashPassword(pwd) {
+  return crypto.createHash('sha256').update(pwd + 'salt_web_shop').digest('hex');
 }
 
-function getData() {
-  if (!data) load();
-  return data;
+function verifyPassword(pwd, hash) {
+  return hashPassword(pwd) === hash;
 }
 
-// ---------- 密码 ----------
-function checkPassword(pwd) {
-  return sha256(pwd) === getData().adminPasswordHash;
-}
-
-function setPassword(pwd) {
-  data.adminPasswordHash = sha256(pwd);
-  save();
-}
-
-// ---------- token（HMAC 签名，有效期 7 天） ----------
 function signToken(extra = {}) {
   const payload = { ...extra, exp: Date.now() + 7 * 24 * 3600 * 1000 };
-  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
-  const sig = crypto.createHmac('sha256', getData().secret).update(body).digest('base64url');
-  return body + '.' + sig;
+  const json = JSON.stringify(payload);
+  const sig = crypto
+    .createHmac('sha256', 'secret_key_web_shop')
+    .update(json)
+    .digest('base64url');
+  return Buffer.from(json).toString('base64url') + '.' + sig;
 }
 
 function verifyToken(token) {
   try {
-    const [body, sig] = String(token).split('.');
-    if (!body || !sig) return null;
-    const expect = crypto.createHmac('sha256', getData().secret).update(body).digest('base64url');
-    if (sig !== expect) return null;
-    const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
-    if (payload.exp < Date.now()) return null;
-    return payload;
+    const [payload, sig] = String(token).split('.');
+    if (!payload || !sig) return null;
+    const json = Buffer.from(payload, 'base64url').toString();
+    const expected = crypto
+      .createHmac('sha256', 'secret_key_web_shop')
+      .update(json)
+      .digest('base64url');
+    if (sig !== expected) return null;
+    const data = JSON.parse(json);
+    return data.exp > Date.now() ? data : null;
   } catch (e) {
     return null;
   }
 }
 
-// ---------- 订单辅助 ----------
-function nextOrderNo() {
-  const d = new Date();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  const no = `${mm}${dd}-${String(getData().orderSeq).padStart(3, '0')}`;
-  data.orderSeq += 1;
-  return no;
+// ==================== 工具函数 ====================
+function genId(prefix = 'id') {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function genOrderNo(merchantId) {
+  const m = new Date().getMonth() + 1;
+  const d = new Date().getDate();
+  return `${String(m).padStart(2, '0')}${String(d).padStart(2, '0')}-${Math.random()
+    .toString(36)
+    .slice(2, 6)
+    .toUpperCase()}`;
 }
 
 function genPickupCode() {
-  const used = new Set(
-    getData()
-      .orders.filter((o) => !['done', 'cancelled'].includes(o.status))
-      .map((o) => o.pickupCode)
-  );
-  let code;
-  do {
-    code = String(Math.floor(1000 + Math.random() * 9000));
-  } while (used.has(code));
-  return code;
+  return Math.random().toString(36).slice(2, 6).toUpperCase();
 }
 
-load();
-
+// ==================== 导出 ====================
 module.exports = {
-  getData,
-  save,
-  checkPassword,
-  setPassword,
+  getDb,
+  initDb,
+  runAsync,
+  getAsync,
+  allAsync,
+  hashPassword,
+  verifyPassword,
   signToken,
   verifyToken,
-  nextOrderNo,
+  genId,
+  genOrderNo,
   genPickupCode,
 };

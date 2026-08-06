@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { NavBar, Button, Toast, Steps, Image } from 'antd-mobile';
 import { api, fmtPrice, fmtTime, addLocalOrderId } from '../api';
 
@@ -19,6 +19,8 @@ const TERMINAL = ['done', 'cancelled'];
 export default function OrderStatus() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const merchantId = searchParams.get('mid') || '';
   const [order, setOrder] = useState(null);
   const [info, setInfo] = useState(null);
   const [paying, setPaying] = useState(false);
@@ -67,7 +69,7 @@ export default function OrderStatus() {
   if (order.status === 'unpaid') {
     return (
       <div className="page">
-        <NavBar onBack={() => navigate('/')}>订单支付</NavBar>
+        <NavBar onBack={() => navigate(`/?mid=${merchantId}`)}>订单支付</NavBar>
         <div className="section pay-card">
           <div style={{ color: '#999', fontSize: 13 }}>应付金额</div>
           <div className="pay-amount">¥{fmtPrice(order.total)}</div>
@@ -100,7 +102,7 @@ export default function OrderStatus() {
 
   return (
     <div className="page">
-      <NavBar onBack={() => navigate('/')}>订单详情</NavBar>
+      <NavBar onBack={() => navigate(`/?mid=${merchantId}`)}>订单详情</NavBar>
 
       <div className="section" style={{ textAlign: 'center' }}>
         <div style={{ fontSize: 15, fontWeight: 600 }}>{STATUS_TEXT[order.status]}</div>
@@ -161,10 +163,10 @@ export default function OrderStatus() {
       </div>
 
       <div style={{ padding: '0 12px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <Button block size="large" onClick={() => navigate('/')}>
+        <Button block size="large" onClick={() => navigate(`/?mid=${merchantId}`)}>
           再逛逛
         </Button>
-        <Button block size="large" fill="outline" onClick={() => navigate('/orders')}>
+         <Button block size="large" fill="outline" onClick={() => navigate(`/orders?mid=${merchantId}`)}>
           查看全部订单
         </Button>
       </div>

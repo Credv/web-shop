@@ -8,20 +8,45 @@ export default function SettingsPage() {
   const [form] = Form.useForm();
   const [pwdForm] = Form.useForm();
   const [loading, setLoading] = useState(false);
+  const [editingName, setEditingName] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [currentName, setCurrentName] = useState('');
+  const [merchantId, setMerchantId] = useState('');
   const qrRef = useRef(null);
-  const shopUrl = window.location.origin + '/';
+  const shopUrl = window.location.origin + '/?mid=' + merchantId;
 
   useEffect(() => {
-    api('/api/admin/settings')
-      .then((s) => form.setFieldsValue(s))
+    api('/api/admin/info')
+      .then((info) => {
+        setCurrentName(info.name);
+        setMerchantId(info.id);
+        form.setFieldsValue(info);
+      })
       .catch((e) => message.error(e.message));
   }, [form]);
 
+  const handleSaveName = async () => {
+    if (!newName.trim()) {
+      message.error('店铺名称不能为空');
+      return;
+    }
+    try {
+      await api('/api/admin/info', { method: 'PATCH', body: { name: newName } });
+      setCurrentName(newName);
+      setEditingName(false);
+      setNewName('');
+      message.success('店铺名称已更新');
+      // 刷新页面获取最新数据
+      setTimeout(() => window.location.reload(), 800);
+    } catch (e) {
+      message.error(e.message);
+    }
+  };
   const save = async () => {
     setLoading(true);
     try {
       const values = await form.validateFields();
-      await api('/api/admin/settings', { method: 'PUT', body: values });
+      await api('/api/admin/info', { method: 'PATCH', body: values });
       message.success('保存成功');
     } catch (e) {
       if (e.message) message.error(e.message);
@@ -63,10 +88,39 @@ export default function SettingsPage() {
     <Row gutter={[16, 16]}>
       <Col xs={24} lg={14}>
         <Card title="店铺信息">
+          {/* 店铺名称展示 + 修改 */}
+          <div style={{ marginBottom: 24, padding: 12, background: '#fafafa', borderRadius: 4 }}>
+            <div style={{ fontSize: 12, color: '#999', marginBottom: 8 }}>当前店铺名称</div>
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+              <span style={{ fontSize: 18, fontWeight: 700, color: '#333' }}>{currentName}</span>
+              <Button size="small" onClick={() => {
+                setEditingName(true);
+                setNewName(currentName);
+              }}>修改店铺名</Button>
+            </div>
+          </div>
+
+          {/* 修改店铺名称弹框 */}
+          {editingName && (
+            <div style={{ marginBottom: 24, padding: 12, border: '1px solid #d9d9d9', borderRadius: 4 }}>
+              <div style={{ marginBottom: 12 }}>修改店铺名称</div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <Input
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  placeholder="输入新的店铺名称"
+                  onPressEnter={handleSaveName}
+                />
+                <Button type="primary" onClick={handleSaveName}>确定</Button>
+                <Button onClick={() => {
+                  setEditingName(false);
+                  setNewName('');
+                }}>取消</Button>
+              </div>
+            </div>
+          )}
+
           <Form form={form} layout="vertical">
-            <Form.Item label="店铺名称" name="shopName" rules={[{ required: true, message: '请输入店铺名称' }]}>
-              <Input />
-            </Form.Item>
             <Form.Item label="店铺公告（滚动展示在店铺顶部）" name="announcement">
               <Input.TextArea rows={2} />
             </Form.Item>

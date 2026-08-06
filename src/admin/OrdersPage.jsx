@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Tabs, Card, Tag, Button, Empty, Row, Col, message, Popconfirm } from 'antd';
+import { Tabs, Card, Tag, Button, Empty, Row, Col, message, Popconfirm, Image } from 'antd';
 import { api, fmtPrice, fmtTime } from '../api';
 
 const STATUS_META = {
@@ -10,7 +10,7 @@ const STATUS_META = {
   done: { text: '已完成', color: 'default' },
   cancelled: { text: '已取消', color: 'red' },
 };
-const ACTIVE = ['unpaid', 'paid', 'making', 'ready'];
+const ACTIVE = ['paid', 'making', 'ready'];
 const PAY_TEXT = { wechat: '微信支付', alipay: '支付宝' };
 
 // 新订单提示音
@@ -119,10 +119,10 @@ export default function OrdersPage() {
         activeKey={tab}
         onChange={setTab}
         items={[
-          { key: 'active', label: `进行中（${activeCount}）` },
+          { key: 'active', label: `待处理（${activeCount}）` },
           { key: 'done', label: '已完成' },
           { key: 'cancelled', label: '已取消' },
-          { key: 'all', label: '全部' },
+          { key: 'all', label: '全部（含待支付）' },
         ]}
       />
       {filtered.length === 0 ? (
@@ -145,10 +145,17 @@ export default function OrdersPage() {
                 </div>
                 {o.items.map((it) => (
                   <div className="order-item-line" key={it.productId}>
-                    <span>
-                      {it.name} × {it.qty}
-                    </span>
-                    <span>¥{fmtPrice(it.price * it.qty)}</span>
+                    {it.image ? (
+                      <Image src={it.image} width={40} height={40} fit="cover" className="order-item-img" />
+                    ) : (
+                      <div className="order-item-img order-item-img-fallback">🍜</div>
+                    )}
+                    <div className="order-item-text">
+                      <div>
+                        {it.name} × {it.qty}
+                      </div>
+                      <div>¥{fmtPrice(it.price * it.qty)}</div>
+                    </div>
                   </div>
                 ))}
                 <div className="order-total-line">

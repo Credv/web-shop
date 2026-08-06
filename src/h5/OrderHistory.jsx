@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { NavBar, Button, Input, Toast } from 'antd-mobile';
 import {
   api,
@@ -22,8 +22,10 @@ const STATUS_META = {
 
 export default function OrderHistory() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const merchantId = searchParams.get('mid') || '';
   const [orders, setOrders] = useState(null);
-  const [user, setUser] = useState(getH5User);
+  const [user, setUser] = useState(() => getH5User());
   const [phone, setPhone] = useState('');
   const [loggingIn, setLoggingIn] = useState(false);
 
@@ -89,7 +91,7 @@ export default function OrderHistory() {
 
   return (
     <div className="page">
-      <NavBar onBack={() => navigate('/')}>我的订单</NavBar>
+      <NavBar onBack={() => navigate(`/?mid=${merchantId}`)}>我的订单</NavBar>
 
       {user ? (
         <div className="oh-login-card">
@@ -124,13 +126,13 @@ export default function OrderHistory() {
         <div style={{ padding: '60px 12px', textAlign: 'center' }}>
           <div style={{ fontSize: 40 }}>🛍️</div>
           <div style={{ color: '#999', marginTop: 12 }}>暂无订单记录，去挑点好吃的吧～</div>
-          <Button color="primary" size="large" style={{ marginTop: 20 }} onClick={() => navigate('/')}>
+          <Button color="primary" size="large" style={{ marginTop: 20 }} onClick={() => navigate(`/?mid=${merchantId}`)}>
             去逛逛
           </Button>
         </div>
       ) : (
         orders.map((o) => (
-          <div className="oh-card" key={o.id} onClick={() => navigate(`/order/${o.id}`)}>
+          <div className="oh-card" key={o.id} onClick={() => navigate(`/order/${o.id}?mid=${merchantId}`)}>
             <div className="oh-head">
               <span>
                 {o.orderNo} · {fmtTime(o.createdAt)}
