@@ -1,0 +1,8 @@
+node_modules
+.git
+server/data
+server/data.json
+uploads
+*.log
+.DS_Store
+.env.local
