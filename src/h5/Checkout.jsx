@@ -64,6 +64,7 @@ export default function Checkout() {
         method: 'POST',
         body: {
           items: items.map((i) => ({ productId: i.id, qty: i.qty })),
+          total: totalCents,  // ✅ 添加订单总金额
           note,
           phone,
           payMethod,
