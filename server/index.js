@@ -299,12 +299,36 @@ app.get('/api/admin/orders', adminAuth, async (req, res) => {
       'SELECT * FROM orders WHERE merchant_id = ? ORDER BY created_at DESC',
       [req.merchant_id]
     );
-    res.json(
-      orders.map((o) => ({
-        ...o,
-        items: JSON.parse(o.items),
-      }))
+    // 补充每个订单的商品详情和字段映射
+    const ordersWithDetails = await Promise.all(
+      orders.map(async (o) => {
+        const items = JSON.parse(o.items);
+        const itemsWithDetails = await Promise.all(
+          items.map(async (item) => {
+            const product = await db.getAsync(
+              'SELECT id, name, price, image FROM products WHERE id = ? AND merchant_id = ?',
+              [item.productId, req.merchant_id]
+            );
+            return {
+              ...item,
+              name: product?.name || '商品已下架',
+              price: product?.price || 0,
+              image: product?.image || null,
+            };
+          })
+        );
+        return {
+          ...o,
+          pickupCode: o.pickup_code,
+          orderNo: o.order_no,
+          createdAt: o.created_at,
+          payMethod: o.pay_method,
+          customerPhone: o.customer_phone,
+          items: itemsWithDetails,
+        };
+      })
     );
+    res.json(ordersWithDetails);
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
@@ -433,7 +457,16 @@ app.get('/api/h5/orders', h5Auth, async (req, res) => {
             };
           })
         );
-        return { ...o, items: itemsWithDetails };
+        return {
+          ...o,
+          pickupCode: o.pickup_code,
+          orderNo: o.order_no,
+          createdAt: o.created_at,
+          payMethod: o.pay_method,
+          customerPhone: o.customer_phone,
+          merchantId: o.merchant_id,
+          items: itemsWithDetails,
+        };
       })
     );
     res.json(ordersWithDetails);
@@ -466,7 +499,16 @@ app.get('/api/h5/orders/:merchantId', h5Auth, async (req, res) => {
             };
           })
         );
-        return { ...o, items: itemsWithDetails };
+        return {
+          ...o,
+          pickupCode: o.pickup_code,
+          orderNo: o.order_no,
+          createdAt: o.created_at,
+          payMethod: o.pay_method,
+          customerPhone: o.customer_phone,
+          merchantId: o.merchant_id,
+          items: itemsWithDetails,
+        };
       })
     );
     res.json(ordersWithDetails);
@@ -503,6 +545,12 @@ app.get('/api/shop/:merchantId/orders/:orderId', async (req, res) => {
 
     res.json({
       ...order,
+      pickupCode: order.pickup_code,
+      orderNo: order.order_no,
+      createdAt: order.created_at,
+      payMethod: order.pay_method,
+      customerPhone: order.customer_phone,
+      merchantId: order.merchant_id,
       items: itemsWithDetails,
     });
   } catch (e) {
