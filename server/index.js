@@ -415,12 +415,28 @@ app.get('/api/h5/orders', h5Auth, async (req, res) => {
       'SELECT * FROM orders WHERE customer_phone = ? ORDER BY created_at DESC',
       [req.customer_phone]
     );
-    res.json(
-      orders.map((o) => ({
-        ...o,
-        items: JSON.parse(o.items),
-      }))
+    // 补充每个订单的商品详情
+    const ordersWithDetails = await Promise.all(
+      orders.map(async (o) => {
+        const items = JSON.parse(o.items);
+        const itemsWithDetails = await Promise.all(
+          items.map(async (item) => {
+            const product = await db.getAsync(
+              'SELECT id, name, price, image FROM products WHERE id = ? AND merchant_id = ?',
+              [item.productId, o.merchant_id]
+            );
+            return {
+              ...item,
+              name: product?.name || '商品已下架',
+              price: product?.price || 0,
+              image: product?.image || null,
+            };
+          })
+        );
+        return { ...o, items: itemsWithDetails };
+      })
     );
+    res.json(ordersWithDetails);
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
@@ -432,12 +448,28 @@ app.get('/api/h5/orders/:merchantId', h5Auth, async (req, res) => {
       'SELECT * FROM orders WHERE merchant_id = ? AND customer_phone = ? ORDER BY created_at DESC',
       [req.params.merchantId, req.customer_phone]
     );
-    res.json(
-      orders.map((o) => ({
-        ...o,
-        items: JSON.parse(o.items),
-      }))
+    // 补充每个订单的商品详情
+    const ordersWithDetails = await Promise.all(
+      orders.map(async (o) => {
+        const items = JSON.parse(o.items);
+        const itemsWithDetails = await Promise.all(
+          items.map(async (item) => {
+            const product = await db.getAsync(
+              'SELECT id, name, price, image FROM products WHERE id = ? AND merchant_id = ?',
+              [item.productId, req.params.merchantId]
+            );
+            return {
+              ...item,
+              name: product?.name || '商品已下架',
+              price: product?.price || 0,
+              image: product?.image || null,
+            };
+          })
+        );
+        return { ...o, items: itemsWithDetails };
+      })
     );
+    res.json(ordersWithDetails);
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
@@ -452,9 +484,26 @@ app.get('/api/shop/:merchantId/orders/:orderId', async (req, res) => {
     );
     if (!order) return res.status(404).json({ message: '订单不存在' });
 
+    // 补充商品详情
+    const items = JSON.parse(order.items);
+    const itemsWithDetails = await Promise.all(
+      items.map(async (item) => {
+        const product = await db.getAsync(
+          'SELECT id, name, price, image, category_id FROM products WHERE id = ? AND merchant_id = ?',
+          [item.productId, req.params.merchantId]
+        );
+        return {
+          ...item,
+          name: product?.name || '商品已下架',
+          price: product?.price || 0,
+          image: product?.image || null,
+        };
+      })
+    );
+
     res.json({
       ...order,
-      items: JSON.parse(order.items),
+      items: itemsWithDetails,
     });
   } catch (e) {
     res.status(500).json({ message: e.message });
