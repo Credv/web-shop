@@ -112,7 +112,12 @@ app.get('/api/admin/info', adminAuth, async (req, res) => {
   try {
     const merchant = await db.getAsync('SELECT * FROM merchants WHERE id = ?', [req.merchant_id]);
     if (!merchant) return res.status(404).json({ message: '商家不存在' });
-    res.json(merchant);
+    // 将数据库字段映射到前端服ἅ的字段名
+    res.json({
+      ...merchant,
+      wechatPay: merchant.wechat_code,
+      alipayPay: merchant.alipay_code,
+    });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
@@ -121,7 +126,8 @@ app.get('/api/admin/info', adminAuth, async (req, res) => {
 // 更新商家信息（店铺名、营业状态、收款码等）
 app.patch('/api/admin/info', adminAuth, async (req, res) => {
   try {
-    const { name, open, wechat_code, alipay_code } = req.body || {};
+    // 兼容两种字段名：wechat_code 或 wechatPay、alipay_code 或 alipayPay
+    const { name, open, wechat_code, alipay_code, wechatPay, alipayPay, announcement, avatar } = req.body || {};
     const updates = [];
     const params = [];
 
@@ -133,13 +139,23 @@ app.patch('/api/admin/info', adminAuth, async (req, res) => {
       updates.push('open = ?');
       params.push(open ? 1 : 0);
     }
-    if (wechat_code !== undefined) {
-      updates.push('wechat_code = ?');
-      params.push(wechat_code);
+    if (announcement !== undefined) {
+      updates.push('announcement = ?');
+      params.push(announcement);
     }
-    if (alipay_code !== undefined) {
+    if (avatar !== undefined) {
+      updates.push('avatar = ?');
+      params.push(avatar);
+    }
+    const wcCode = wechat_code !== undefined ? wechat_code : wechatPay;
+    if (wcCode !== undefined) {
+      updates.push('wechat_code = ?');
+      params.push(wcCode);
+    }
+    const apCode = alipay_code !== undefined ? alipay_code : alipayPay;
+    if (apCode !== undefined) {
       updates.push('alipay_code = ?');
-      params.push(alipay_code);
+      params.push(apCode);
     }
 
     if (updates.length === 0) return res.status(400).json({ message: '未提供任何更新字段' });
