@@ -128,6 +128,7 @@ app.patch('/api/admin/info', adminAuth, async (req, res) => {
   try {
     // 兼容两种字段名：wechat_code 或 wechatPay、alipay_code 或 alipayPay
     const { name, open, wechat_code, alipay_code, wechatPay, alipayPay, announcement, avatar } = req.body || {};
+    console.log('🐛 PATCH /api/admin/info - Received:', { name, open, wechat_code, alipay_code, wechatPay, alipayPay, announcement, avatar });  // 🐛 调试：看看后端接收到了什么
     const updates = [];
     const params = [];
 
@@ -161,12 +162,12 @@ app.patch('/api/admin/info', adminAuth, async (req, res) => {
     if (updates.length === 0) return res.status(400).json({ message: '未提供任何更新字段' });
 
     params.push(req.merchant_id);
-    await db.runAsync(
-      `UPDATE merchants SET ${updates.join(', ')} WHERE id = ?`,
-      params
-    );
+    const sql = `UPDATE merchants SET ${updates.join(', ')} WHERE id = ?`;
+    console.log('🐛 SQL:', sql, 'Params:', params);  // 🐛 调试
+    await db.runAsync(sql, params);
 
     const merchant = await db.getAsync('SELECT * FROM merchants WHERE id = ?', [req.merchant_id]);
+    console.log('🐛 After update:', merchant);  // 🐛 调试：看看更新后的结果
     res.json(merchant);
   } catch (e) {
     res.status(500).json({ message: e.message });
