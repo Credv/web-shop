@@ -98,7 +98,8 @@ export default function OrderStatus() {
                 我已完成支付
               </Button>
             </>
-          )}}
+          )
+        }
         </div>
       </div>
     );
