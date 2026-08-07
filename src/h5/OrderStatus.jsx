@@ -27,17 +27,18 @@ export default function OrderStatus() {
 
   const load = useCallback(
     () =>
-      api(`/api/orders/${id}`)
+      api(`/api/shop/${merchantId}/orders/${id}`)
         .then(setOrder)
         .catch((e) => Toast.show(e.message)),
-    [id]
+    [id, merchantId]
   );
 
   useEffect(() => {
+    if (!merchantId) return;
     load();
     addLocalOrderId(id);
-    api('/api/shop/info').then(setInfo).catch(() => {});
-  }, [load, id]);
+    api(`/api/shop/${merchantId}/info`).then(setInfo).catch(() => {});
+  }, [load, id, merchantId]);
 
   // 非终态订单 3 秒轮询一次状态
   useEffect(() => {
@@ -49,7 +50,7 @@ export default function OrderStatus() {
   const confirmPaid = async () => {
     setPaying(true);
     try {
-      await api(`/api/orders/${id}/paid`, { method: 'POST' });
+      await api(`/api/shop/${merchantId}/orders/${id}/pay`, { method: 'PATCH' });
       await load();
       Toast.show('已通知商家');
     } catch (e) {

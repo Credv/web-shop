@@ -408,6 +408,24 @@ app.post('/api/h5/login', async (req, res) => {
 });
 
 // H5 获取用户订单历史
+// 获取H5用户所有订单（来自所有商家）
+app.get('/api/h5/orders', h5Auth, async (req, res) => {
+  try {
+    const orders = await db.allAsync(
+      'SELECT * FROM orders WHERE customer_phone = ? ORDER BY created_at DESC',
+      [req.customer_phone]
+    );
+    res.json(
+      orders.map((o) => ({
+        ...o,
+        items: JSON.parse(o.items),
+      }))
+    );
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
 app.get('/api/h5/orders/:merchantId', h5Auth, async (req, res) => {
   try {
     const orders = await db.allAsync(
