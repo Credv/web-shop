@@ -366,6 +366,8 @@ app.get('/api/shop/:merchantId/info', async (req, res) => {
       products,
       settings: {
         open: !!merchant.open,
+        wechatPay: merchant.wechat_code,
+        alipayPay: merchant.alipay_code,
       },
     });
   } catch (e) {
