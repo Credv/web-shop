@@ -6,6 +6,11 @@ import { api } from '../api';
 export default function ImgUpload({ value, onChange }) {
   const fileList = value ? [{ uid: '-1', name: 'image', status: 'done', url: value }] : [];
 
+  const handleChange = (url) => {
+    console.log('ImgUpload onChange:', url);  // 🐛 调试：看看是否被调用
+    onChange(url);
+  };
+
   return (
     <Upload
       listType="picture-card"
@@ -16,14 +21,14 @@ export default function ImgUpload({ value, onChange }) {
           const fd = new FormData();
           fd.append('file', file);
           const r = await api('/api/upload', { method: 'POST', body: fd });
-          onChange(r.url);
+          handleChange(r.url);
           onSuccess(r);
         } catch (e) {
           message.error(e.message);
           onError(e);
         }
       }}
-      onRemove={() => onChange('')}
+      onRemove={() => handleChange('')}
     >
       {fileList.length === 0 && (
         <div>

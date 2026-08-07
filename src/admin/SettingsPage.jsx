@@ -46,8 +46,11 @@ export default function SettingsPage() {
     setLoading(true);
     try {
       const values = await form.validateFields();
+      console.log('Save values:', values);  // 🐛 调试：看看实际发送的值
       await api('/api/admin/info', { method: 'PATCH', body: values });
       message.success('保存成功');
+      // 刷新获取最新数据
+      setTimeout(() => window.location.reload(), 1000);
     } catch (e) {
       if (e.message) message.error(e.message);
     } finally {
