@@ -32,12 +32,15 @@
 ### 系统架构
 
 ```
-┌─ Nginx (反向代理)
+┌─ Netlify 静态托管 (CDN)
 │  ├─ / (H5 SPA)           → /dist
-│  ├─ /admin (后台 SPA)    → /dist
-│  └─ /api (所有 API)      → :3900
+│  └─ /admin (后台 SPA)    → /dist
 │
-└─ Node.js (Express + SQLite)
+├─ Netlify Functions（serverless-http 包住同一个 Express app）
+│  ├─ /api/*               → netlify/functions/api
+│  └─ /uploads/*           → 同上，读 Netlify Blobs
+│
+└─ Postgres (Neon)
    ├─ POST   /api/admin/login              # 商家登录
    ├─ POST   /api/admin/register           # 商家注册
    ├─ GET    /api/admin/info               # 商家信息
@@ -53,18 +56,11 @@
 ### 启动命令
 
 ```bash
-# 开发环境
-export PATH="$HOME/git/nvs/node/20.19.0/arm64/bin:$PATH"
-cd /Users/credv/个人小店/web-shop
-
-# 后端（3900 端口）
-npm start
-
-# 前端开发（5173 端口，另一个终端）
-npm run dev
-
-# 生产构建
-npm run build
+npm install
+cp .env.example .env          # DATABASE_URL / TOKEN_SECRET
+npx netlify-cli dev           # http://localhost:8888，页面 + API + 本地 Blobs 模拟
+npm run seed                  # 写入演示商家
+npm run build                 # 生产构建（Netlify 构建时自动执行）
 ```
 
 ### 测试商家账号
@@ -85,7 +81,7 @@ http://localhost:5173/?mid=<merchant_id_1>
 http://localhost:5173/?mid=<merchant_id_2>
 
 # 获取真实 merchant_id（从后端查看）
-curl http://localhost:3900/api/admin/login \
+curl http://localhost:8888/api/admin/login \
   -H "Content-Type: application/json" \
   -d '{"phone":"13800000001","password":"admin123"}'
 ```
@@ -94,16 +90,16 @@ curl http://localhost:3900/api/admin/login \
 
 ```
 # 登录
-curl -X POST http://localhost:3900/api/admin/login \
+curl -X POST http://localhost:8888/api/admin/login \
   -H "Content-Type: application/json" \
   -d '{"phone":"13800000001","password":"admin123"}'
 
 # 获取商家信息
-curl http://localhost:3900/api/admin/info \
+curl http://localhost:8888/api/admin/info \
   -H "Authorization: Bearer <token>"
 
 # 获取订单列表
-curl http://localhost:3900/api/admin/orders \
+curl http://localhost:8888/api/admin/orders \
   -H "Authorization: Bearer <token>"
 ```
 
@@ -241,13 +237,15 @@ sudo nginx -t
 sudo systemctl restart nginx
 
 # 7. 启动 Node.js 后端（PM2）
+#    注意：当前代码把 app 作为模块导出（server/app.js），自建时需要自己加一行 app.listen；
+#    图片存储用的是 Netlify Blobs，自建要换成 OSS/S3，数据库连接串换成实例内的 Postgres。
 sudo npm install -g pm2
 pm2 start npm --name "web-shop" -- start
 pm2 startup
 pm2 save
 
 # 8. 初始化数据
-node server/seed-multi.js
+npm run seed
 ```
 
 ---

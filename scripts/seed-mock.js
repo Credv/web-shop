@@ -1,6 +1,6 @@
 // 批量写入 mock 商品（通过后台 API），用于测试滚动等效果
 // 用法：node scripts/seed-mock.js
-const BASE = process.env.BASE || 'http://localhost:3900';
+const BASE = process.env.BASE || 'http://localhost:8888';
 
 const MOCK = [
   // [分类, 名称, 描述, 价格(分), 库存]

@@ -1,62 +1,70 @@
-# 摆摊个人小店 · 扫码点餐
+# web-shop · 多商家扫码点餐平台
 
-饿了么风格的 H5 点餐小店 + 商家后台，适合摆摊场景：顾客扫码进店 → 加购下单 → 扫你的个人收款码付款 → 报取餐码取餐；你在后台接单、制作、管理商品。
+一个平台，多个商家自助开店：商家手机号注册 → 后台建分类和商品 → 上传个人收款码 → 下载店铺二维码贴到摊位；顾客扫码进店点单、付款后凭取餐码等餐。前后端同源部署在 Netlify（Functions + Postgres + Blobs），无独立服务器。
 
-## 功能
+**顾客端 H5**
 
-**用户端（H5，无需注册登录，手机号选填）**
+- 店铺首页：分类导航 + 商品列表滚动联动、营业状态、库存与售罄校验
+- 结算：备注、手机号（选填）、微信/支付宝收款码
+- 付款页展示商家收款码 → 顾客付款后点「我已支付」
+- 订单页：取餐码 + 制作进度轮询
 
-- 店铺首页：店铺名/公告/营业状态、左侧分类导航 + 右侧商品列表（滚动联动）
-- 购物车、库存校验、售罄提示
-- 结算页：备注、手机号（选填）、支付方式（微信/支付宝个人收款码）
-- 付款页：展示商家收款码 → 顾客付款后点「我已支付」
-- 订单状态页：取餐码 + 制作进度（自动轮询刷新）
+**商家后台 `/admin`**
 
-**商家后台（`/admin`）**
-
-- 订单管理：新单提示音、确认收款 → 开始制作 → 待取餐 → 已完成 / 取消（自动退库存）
+- 订单流：确认收款 → 制作中 → 待取餐 → 已完成 / 取消（自动退库存）
 - 商品管理：分类增删排序、商品增删改、图片上传、价格/库存/上下架
-- 店铺设置：店铺名、公告、头像、营业开关、微信/支付宝收款码上传、修改密码
-- 点餐二维码：生成并下载，打印张贴在摊位
+- 店铺设置：店铺名、公告、头像、营业开关、收款码上传、改密码
+- 点餐二维码：按商家 ID 生成，下载打印
 
-## 快速开始
+## 技术栈
+
+React 18 + Vite + antd / antd-mobile · Express + serverless-http · Netlify Functions · Postgres（Neon）· Netlify Blobs
+
+## 本地开发
+
+需要 Node 20+。
 
 ```bash
-cd web-shop
 npm install
-npm run setup        # 写入示例分类与商品（可选）
-
-# 启动后端（端口 3900）
-npm start
-
-# 另开终端，启动前端开发服务（端口 5173）
-npm run dev
+cp .env.example .env      # 填入 DATABASE_URL 与 TOKEN_SECRET
+npx netlify-cli dev       # http://localhost:8888，同时提供页面与 /api
 ```
 
-- 用户端 H5：<http://localhost:5173/>
-- 商家后台：<http://localhost:5173/admin> （默认密码 `admin123`，登录后请尽快修改）
-
-## 部署上线（摆摊实际使用）
+`netlify dev` 会用本地的 Blobs 模拟存储跑函数，所以上传图片在本地也可用。只调样式时可以单独 `npm run dev`（5173，但此时没有 API）。
 
 ```bash
-npm run build   # 构建前端到 dist/
-npm start       # 3900 端口同时提供 API 与页面
+npm run seed              # 写入 3 个演示商家及其商品
 ```
 
-部署到任意公网服务器（或用内网穿透临时体验），然后在后台「店铺设置」下载点餐二维码打印张贴。
+演示账号：`13800000001 / admin123`（另两个见 `server/seed-demo.js`）。
 
-> 收款说明：个人收款码无法自动回调，采用「顾客付款后手动点击『我已支付』+ 商家核对到账后确认」的模式；收到微信/支付宝到账语音提醒后即可开始制作。
+## 部署
 
-## 目录结构
+1. 建一个 Neon 免费 Postgres，拿到 pooled 连接串。
+2. Netlify 连接本仓库，`netlify.toml` 已配好构建与转发规则，无需额外设置。
+3. 在 Netlify site 环境变量里配置 `DATABASE_URL`、`TOKEN_SECRET`（`openssl rand -hex 32`）。
+4. 首次访问任意接口会自动建表；本地执行 `npm run seed` 灌演示数据。
+
+## 结构
 
 ```
-web-shop/
-├── server/            # Express 服务端（数据存 server/data/data.json）
-│   ├── index.js       # API 与静态服务
-│   ├── db.js          # JSON 数据层 / token / 订单号
-│   └── init-sample.js # 示例数据
-├── src/
-│   ├── h5/            # 用户端：店铺 / 结算 / 付款 / 订单状态
-│   └── admin/         # 后台：订单 / 商品 / 设置
-└── uploads/           # 上传的图片（商品图、收款码）
+├── index.html / src/        # 前端：h5/ 顾客端、admin/ 商家后台
+├── netlify.toml             # 构建、函数、/api 与 /uploads 转发、SPA 兜底
+├── netlify/functions/api.js # serverless-http 包装 Express 应用
+└── server/
+    ├── app.js               # 全部 API 路由
+    ├── db.js                # Postgres 连接池、事务、scrypt 口令、token 签名
+    ├── schema.js            # 建表语句
+    └── seed-demo.js         # 演示数据
 ```
+
+## 设计要点
+
+- **多租户隔离**：`categories / products / orders` 全部按 `merchant_id` 过滤，接口路径形如 `/api/shop/:merchantId/orders`，二维码内容即 `/?mid=<merchantId>`。
+- **金额与库存在服务端裁决**：下单时按数据库价格重算总价，`UPDATE ... WHERE stock >= qty` 判 `rowCount` 原子扣减，整单在一个事务里，杜绝并发超卖。
+- **订单存快照**：订单的 `items` 记录下单当时的名称、单价、图片，商家改价下架都不影响历史订单，读取无需回查商品表。
+- **取餐码自增**：每个商家一条 `UPDATE ... RETURNING pickup_seq` 序列，叫号唯一且不碰撞。
+- **口令与令牌**：scrypt + 每商家独立随机盐存哈希；登录 token 用 `TOKEN_SECRET` 做 HMAC 签名并校验过期，密钥不进仓库。
+- **上传走对象存储**：文件存 Netlify Blobs，读取时 Content-Type 取自服务端白名单推导的真实类型，不接受客户端自报类型，杜绝上传即可执行。
+
+> 收款说明：个人收款码没有支付回调，采用「顾客点『我已支付』+ 商家核对到账后确认」的双人流程；资金直达商家个人账户，平台不经手。
